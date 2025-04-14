@@ -53,6 +53,42 @@ def get_next_letter_number(letter_type):
     conn.close()
     return f"{count}/{year_suffix}"
 
+def update_status(number, new_status):
+    conn = sqlite3.connect("letters.db")
+    cursor = conn.cursor()
+    cursor.execute("UPDATE letters SET status = ? WHERE number = ?", (new_status, number))
+    conn.commit()
+    conn.close()
+
+def get_letters_by_status(status):
+    conn = sqlite3.connect("letters.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT type, number, object, from_to FROM letters WHERE status = ? ORDER BY id DESC", (status,))
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+def get_letter_status(number):
+    conn = sqlite3.connect("letters.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT status FROM letters WHERE number = ?", (number,))
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result else None
+
+def export_journal(journal_type):
+    conn = sqlite3.connect("letters.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM letters WHERE type = ? ORDER BY id DESC", (journal_type,))
+    rows = cursor.fetchall()
+    conn.close()
+    path = f"export_{journal_type}.csv"
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("id,type,date,number,object,from_to,description,filename,status\n")
+        for row in rows:
+            f.write(",".join(map(str, row)) + "\n")
+    return path
+
 # --- Telegram Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("Українська 🇺🇦", callback_data='ua'),
@@ -128,6 +164,56 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Скасовано / Cancelled")
     return ConversationHandler.END
 
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    help_text = (
+        "📘 Команди:\n"
+        "/start — почати реєстрацію\n"
+        "/list_new — всі нові листи\n"
+        "/mark_done <номер> — позначити як оброблений\n"
+        "/get_status <номер> — статус листа\n"
+        "/export_outgoing — експорт вихідного CSV\n"
+        "/export_incoming — експорт вхідного CSV"
+    )
+    await update.message.reply_text(help_text)
+
+async def mark_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("❗️Введіть номер листа: /mark_done 1/25")
+        return
+    number = context.args[0]
+    update_status(number, "done")
+    await update.message.reply_text(f"✅ Лист {number} позначено як оброблений.")
+
+async def list_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    rows = get_letters_by_status("new")
+    if not rows:
+        await update.message.reply_text("✅ Немає нових листів")
+        return
+    text = "📬 Нові листи:\n"
+    for t, number, obj, who in rows:
+        prefix = "📥" if t == "in" else "📤"
+        text += f"{prefix} {number} — {obj} — {who}\n"
+    await update.message.reply_text(text)
+
+async def get_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("❗️Введіть номер листа: /get_status 1/25")
+        return
+    number = context.args[0]
+    status = get_letter_status(number)
+    if status:
+        await update.message.reply_text(f"📌 Статус листа {number}: {status}")
+    else:
+        await update.message.reply_text("❌ Лист не знайдено")
+
+async def export_outgoing(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    path = export_journal("out")
+    await update.message.reply_document(InputFile(path))
+
+async def export_incoming(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    path = export_journal("in")
+    await update.message.reply_document(InputFile(path))
+
 # --- Init ---
 init_db()
 
@@ -147,6 +233,12 @@ conv_handler = ConversationHandler(
 )
 
 app.add_handler(conv_handler)
+app.add_handler(CommandHandler("help", help_command))
+app.add_handler(CommandHandler("mark_done", mark_done))
+app.add_handler(CommandHandler("list_new", list_new))
+app.add_handler(CommandHandler("get_status", get_status))
+app.add_handler(CommandHandler("export_outgoing", export_outgoing))
+app.add_handler(CommandHandler("export_incoming", export_incoming))
 
 if __name__ == '__main__':
     app.run_polling()

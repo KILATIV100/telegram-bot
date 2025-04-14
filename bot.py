@@ -129,7 +129,8 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- Init ---
 init_db()
 
-app = ApplicationBuilder().token("7864265902:AAFz0yTBhto0Ck5_elZYOaB8kId6fih8zck").build()
+import os
+ApplicationBuilder().token(os.getenv("7864265902:AAFz0yTBhto0Ck5_elZYOaB8kId6fih8zck"))
 
 conv_handler = ConversationHandler(
     entry_points=[CommandHandler('start', start)],

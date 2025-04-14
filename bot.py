@@ -126,12 +126,29 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Скасовано / Cancelled")
     return ConversationHandler.END
 
+
 # --- Init ---
 init_db()
 
-import os
-ApplicationBuilder().token(os.getenv("7864265902:AAFz0yTBhto0Ck5_elZYOaB8kId6fih8zck"))
+app = ApplicationBuilder().token(os.getenv("BOT_TOKEN")).build()
 
+conv_handler = ConversationHandler(
+    entry_points=[CommandHandler('start', start)],
+    states={
+        LANGUAGE: [CallbackQueryHandler(choose_language)],
+        JOURNAL: [CallbackQueryHandler(choose_journal)],
+        REGISTER_OBJECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_object)],
+        REGISTER_FROM_TO: [MessageHandler(filters.TEXT & ~filters.COMMAND, register_from_to)],
+        REGISTER_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND, register_desc)],
+        REGISTER_FILE: [MessageHandler(filters.Document.ALL, register_file)],
+    },
+    fallbacks=[CommandHandler('cancel', cancel)]
+)
+
+app.add_handler(conv_handler)
+
+if __name__ == '__main__':
+    app.run_polling()
 conv_handler = ConversationHandler(
     entry_points=[CommandHandler('start', start)],
     states={

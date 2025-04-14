@@ -27,218 +27,35 @@ def init_db():
             from_to TEXT,
             description TEXT,
             filename TEXT,
-            status TEXT DEFAULT 'new'
+            status TEXT DEFAULT 'new',
+            file_url TEXT
         );
     """)
     conn.commit()
     conn.close()
 
 # --- DB functions ---
-def insert_letter(letter_type, date, number, object_name, from_to, description, filename, status="new"):
+def insert_letter(letter_type, date, number, object_name, from_to, description, filename, status="new", file_url=""):
     conn = sqlite3.connect("letters.db")
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO letters (type, date, number, object, from_to, description, filename, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (letter_type, date, number, object_name, from_to, description, filename, status))
+        INSERT INTO letters (type, date, number, object, from_to, description, filename, status, file_url)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (letter_type, date, number, object_name, from_to, description, filename, status, file_url))
     conn.commit()
     conn.close()
-
-def get_next_letter_number(letter_type):
-    year_suffix = datetime.datetime.now().year % 100
-    conn = sqlite3.connect("letters.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM letters WHERE type = ?", (letter_type,))
-    count = cursor.fetchone()[0] + 1
-    conn.close()
-    return f"{count}/{year_suffix}"
-
-def update_status(number, new_status):
-    conn = sqlite3.connect("letters.db")
-    cursor = conn.cursor()
-    cursor.execute("UPDATE letters SET status = ? WHERE number = ?", (new_status, number))
-    conn.commit()
-    conn.close()
-
-def get_letters_by_status(status):
-    conn = sqlite3.connect("letters.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT type, number, object, from_to FROM letters WHERE status = ? ORDER BY id DESC", (status,))
-    rows = cursor.fetchall()
-    conn.close()
-    return rows
-
-def get_letter_status(number):
-    conn = sqlite3.connect("letters.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT status FROM letters WHERE number = ?", (number,))
-    result = cursor.fetchone()
-    conn.close()
-    return result[0] if result else None
-
-def export_journal(journal_type):
-    conn = sqlite3.connect("letters.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM letters WHERE type = ? ORDER BY id DESC", (journal_type,))
-    rows = cursor.fetchall()
-    conn.close()
-    path = f"export_{journal_type}.csv"
-    with open(path, "w", encoding="utf-8") as f:
-        f.write("id,type,date,number,object,from_to,description,filename,status\n")
-        for row in rows:
-            f.write(",".join(map(str, row)) + "\n")
-    return path
 
 # --- Telegram Handlers ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton("Українська 🇺🇦", callback_data='ua'),
-                 InlineKeyboardButton("English 🇬🇧", callback_data='en')]]
-    await update.message.reply_text("Choose language / Оберіть мову:",
-                                    reply_markup=InlineKeyboardMarkup(keyboard))
-    return LANGUAGE
-
-async def choose_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    lang = update.callback_query.data
-    context.user_data['lang'] = lang
-    await update.callback_query.answer()
-    keyboard = [[InlineKeyboardButton("📥 Вхідний / Incoming", callback_data='in'),
-                 InlineKeyboardButton("📤 Вихідний / Outgoing", callback_data='out')]]
-    await update.callback_query.edit_message_text("Оберіть журнал / Choose journal:",
-                                                  reply_markup=InlineKeyboardMarkup(keyboard))
-    return JOURNAL
-
-async def choose_journal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['journal'] = update.callback_query.data
-    await update.callback_query.answer()
-    await update.callback_query.edit_message_text("Введіть назву обʼєкта / Enter object name:")
-    return REGISTER_OBJECT
-
-async def manual_object(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['object'] = update.message.text
-    return await ask_from_to(update, context)
-
-async def ask_from_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    journal = context.user_data['journal']
-    if journal == 'in':
-        await update.message.reply_text("Від кого лист? / From whom?")
-    else:
-        await update.message.reply_text("Кому адресовано лист? / To whom?")
-    return REGISTER_FROM_TO
-
-async def register_from_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['from_to'] = update.message.text
-    await update.message.reply_text("Короткий опис / Short description:")
-    return REGISTER_DESC
-
-async def register_desc(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['desc'] = update.message.text
-    number = get_next_letter_number(context.user_data['journal'])
-    context.user_data['number'] = number
-    await update.message.reply_text(f"Ваш реєстраційний номер: {number}\nПрикріпіть файл / Attach the document:")
-    return REGISTER_FILE
-
-async def register_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    file = update.message.document
-    journal = context.user_data['journal']
-    now = datetime.datetime.now().strftime("%Y-%m-%d")
-    number = context.user_data['number']
-
-    filename = f"{number.replace('/', '_')}_{file.file_name}"
-    path = os.path.join(DOCS_DIR_IN if journal == 'in' else DOCS_DIR_OUT, filename)
-    await file.get_file().download_to_drive(path)
-
-    insert_letter(
-        letter_type=journal,
-        date=now,
-        number=number,
-        object_name=context.user_data['object'],
-        from_to=context.user_data['from_to'],
-        description=context.user_data['desc'],
-        filename=filename
-    )
-
-    await update.message.reply_text(f"✅ Зареєстровано / Registered\nНомер: {number}\nДата: {now}")
-    return ConversationHandler.END
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("❌ Скасовано / Cancelled")
-    return ConversationHandler.END
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    help_text = (
-        "📘 Команди:\n"
-        "/start — почати реєстрацію\n"
-        "/list_new — всі нові листи\n"
-        "/mark_done <номер> — позначити як оброблений\n"
-        "/get_status <номер> — статус листа\n"
-        "/export_outgoing — експорт вихідного CSV\n"
-        "/export_incoming — експорт вхідного CSV"
-    )
-    await update.message.reply_text(help_text)
-
-async def mark_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("❗️Введіть номер листа: /mark_done 1/25")
-        return
-    number = context.args[0]
-    update_status(number, "done")
-    await update.message.reply_text(f"✅ Лист {number} позначено як оброблений.")
-
-async def list_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    rows = get_letters_by_status("new")
-    if not rows:
-        await update.message.reply_text("✅ Немає нових листів")
-        return
-    text = "📬 Нові листи:\n"
-    for t, number, obj, who in rows:
-        prefix = "📥" if t == "in" else "📤"
-        text += f"{prefix} {number} — {obj} — {who}\n"
-    await update.message.reply_text(text)
-
-async def get_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("❗️Введіть номер листа: /get_status 1/25")
-        return
-    number = context.args[0]
-    status = get_letter_status(number)
-    if status:
-        await update.message.reply_text(f"📌 Статус листа {number}: {status}")
-    else:
-        await update.message.reply_text("❌ Лист не знайдено")
-
-async def export_outgoing(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    path = export_journal("out")
-    await update.message.reply_document(InputFile(path))
-
-async def export_incoming(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    path = export_journal("in")
-    await update.message.reply_document(InputFile(path))
+async def get_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    await update.message.reply_text(f"🆔 Chat ID: {chat_id}")
 
 # --- Init ---
 init_db()
 
 app = ApplicationBuilder().token(os.getenv("BOT_TOKEN")).build()
 
-conv_handler = ConversationHandler(
-    entry_points=[CommandHandler('start', start)],
-    states={
-        LANGUAGE: [CallbackQueryHandler(choose_language)],
-        JOURNAL: [CallbackQueryHandler(choose_journal)],
-        REGISTER_OBJECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_object)],
-        REGISTER_FROM_TO: [MessageHandler(filters.TEXT & ~filters.COMMAND, register_from_to)],
-        REGISTER_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND, register_desc)],
-        REGISTER_FILE: [MessageHandler(filters.Document.ALL, register_file)],
-    },
-    fallbacks=[CommandHandler('cancel', cancel)]
-)
-
-app.add_handler(conv_handler)
-app.add_handler(CommandHandler("help", help_command))
-app.add_handler(CommandHandler("mark_done", mark_done))
-app.add_handler(CommandHandler("list_new", list_new))
-app.add_handler(CommandHandler("get_status", get_status))
-app.add_handler(CommandHandler("export_outgoing", export_outgoing))
-app.add_handler(CommandHandler("export_incoming", export_incoming))
+app.add_handler(CommandHandler("get_chat_id", get_chat_id))
 
 if __name__ == '__main__':
     app.run_polling()

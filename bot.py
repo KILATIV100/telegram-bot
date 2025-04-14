@@ -10,6 +10,8 @@ LANGUAGE, JOURNAL, REGISTER_OBJECT, REGISTER_FROM_TO, REGISTER_DESC, REGISTER_NU
 ADMIN_IDS = [7363233852]  # Замініть на свій Telegram ID
 DOCS_DIR_IN = "incoming_docs"
 DOCS_DIR_OUT = "outgoing_docs"
+CHANNEL_CHAT_ID = -1002603457925  # chat_id вашого каналу
+
 os.makedirs(DOCS_DIR_IN, exist_ok=True)
 os.makedirs(DOCS_DIR_OUT, exist_ok=True)
 
@@ -45,17 +47,59 @@ def insert_letter(letter_type, date, number, object_name, from_to, description, 
     conn.commit()
     conn.close()
 
-# --- Telegram Handlers ---
-async def get_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    await update.message.reply_text(f"🆔 Chat ID: {chat_id}")
+def find_letter_by_number(number):
+    conn = sqlite3.connect("letters.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT type, date, number, object, from_to, description, status, file_url FROM letters WHERE number = ?", (number,))
+    row = cursor.fetchone()
+    conn.close()
+    return row
 
-# --- Init ---
-init_db()
+# --- register_file handler ---
+async def register_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    file = update.message.document
+    journal = context.user_data['journal']
+    now = datetime.datetime.now().strftime("%Y-%m-%d")
+    number = context.user_data['number']
 
-app = ApplicationBuilder().token(os.getenv("BOT_TOKEN")).build()
+    filename = f"{number.replace('/', '_')}_{file.file_name}"
+    path = os.path.join(DOCS_DIR_IN if journal == 'in' else DOCS_DIR_OUT, filename)
+    await file.get_file().download_to_drive(path)
 
-app.add_handler(CommandHandler("get_chat_id", get_chat_id))
+    caption = f"{number} ({now})\n{context.user_data['object']}\n{context.user_data['desc']}"
+    with open(path, "rb") as f:
+        sent = await context.bot.send_document(chat_id=CHANNEL_CHAT_ID, document=f, caption=caption)
 
-if __name__ == '__main__':
-    app.run_polling()
+    file_url = f"https://t.me/c/{str(CHANNEL_CHAT_ID)[4:]}/{sent.message_id}"
+
+    insert_letter(
+        letter_type=journal,
+        date=now,
+        number=number,
+        object_name=context.user_data['object'],
+        from_to=context.user_data['from_to'],
+        description=context.user_data['desc'],
+        filename=filename,
+        file_url=file_url
+    )
+
+    await update.message.reply_text(f"✅ Зареєстровано / Registered\nНомер: {number}\nДата: {now}")
+    return ConversationHandler.END
+
+# --- пошук з кнопкою ---
+async def show_found_letter(update, context, number):
+    letter = find_letter_by_number(number)
+    if not letter:
+        await update.message.reply_text("❌ Лист не знайдено")
+        return ConversationHandler.END
+    t, date, number, obj, who, desc, status, url = letter
+    msg = f"📄 *{number}*\nДата: {date}\nТип: {'Вхідний' if t == 'in' else 'Вихідний'}\nОбʼєкт: {obj}\nВід/Кому: {who}\nОпис: {desc}\nСтатус: {status}"
+    keyboard = [
+        [InlineKeyboardButton("📂 Відкрити документ", url=url)] if url else [],
+        [InlineKeyboardButton("✅ Опрацьовано", callback_data=f"mark_{number}"),
+         InlineKeyboardButton("🗑 Видалити", callback_data=f"delete_{number}")],
+        [InlineKeyboardButton("🏠 На головну", callback_data='menu')]
+    ]
+    keyboard = [row for row in keyboard if row]  # remove empty
+    await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+    return ConversationHandler.END

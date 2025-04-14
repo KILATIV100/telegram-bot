@@ -5,7 +5,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFi
 from telegram.ext import (ApplicationBuilder, CommandHandler, ContextTypes,
                           MessageHandler, filters, CallbackQueryHandler, ConversationHandler)
 
-LANGUAGE, JOURNAL, REGISTER_OBJECT, REGISTER_FROM_TO, REGISTER_DESC, REGISTER_FILE = range(6)
+LANGUAGE, JOURNAL, REGISTER_OBJECT, REGISTER_FROM_TO, REGISTER_DESC, REGISTER_NUMBER, REGISTER_FILE = range(7)
 
 ADMIN_IDS = [7363233852]  # Замініть на свій Telegram ID
 DOCS_DIR_IN = "incoming_docs"
@@ -96,14 +96,16 @@ async def register_from_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def register_desc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['desc'] = update.message.text
-    await update.message.reply_text("Прикріпіть файл / Attach the document:")
+    number = get_next_letter_number(context.user_data['journal'])
+    context.user_data['number'] = number
+    await update.message.reply_text(f"Ваш реєстраційний номер: {number}\nПрикріпіть файл / Attach the document:")
     return REGISTER_FILE
 
 async def register_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file = update.message.document
     journal = context.user_data['journal']
     now = datetime.datetime.now().strftime("%Y-%m-%d")
-    number = get_next_letter_number(journal)
+    number = context.user_data['number']
 
     filename = f"{number.replace('/', '_')}_{file.file_name}"
     path = os.path.join(DOCS_DIR_IN if journal == 'in' else DOCS_DIR_OUT, filename)
@@ -126,29 +128,11 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Скасовано / Cancelled")
     return ConversationHandler.END
 
-
 # --- Init ---
 init_db()
 
 app = ApplicationBuilder().token(os.getenv("BOT_TOKEN")).build()
 
-conv_handler = ConversationHandler(
-    entry_points=[CommandHandler('start', start)],
-    states={
-        LANGUAGE: [CallbackQueryHandler(choose_language)],
-        JOURNAL: [CallbackQueryHandler(choose_journal)],
-        REGISTER_OBJECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_object)],
-        REGISTER_FROM_TO: [MessageHandler(filters.TEXT & ~filters.COMMAND, register_from_to)],
-        REGISTER_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND, register_desc)],
-        REGISTER_FILE: [MessageHandler(filters.Document.ALL, register_file)],
-    },
-    fallbacks=[CommandHandler('cancel', cancel)]
-)
-
-app.add_handler(conv_handler)
-
-if __name__ == '__main__':
-    app.run_polling()
 conv_handler = ConversationHandler(
     entry_points=[CommandHandler('start', start)],
     states={
